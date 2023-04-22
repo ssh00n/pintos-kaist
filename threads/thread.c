@@ -28,6 +28,12 @@
    that are ready to run but not actually running. */
 static struct list ready_list;
 
+/* Waiting List */
+static struct list sleep_list;
+void thread_sleep(int64_t ticks);
+void wake_up(int64_t ticks);
+bool less_ticks(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED);
+
 /* Idle thread. */
 static struct thread *idle_thread;
 
@@ -108,12 +114,14 @@ thread_init (void) {
 	/* Init the globla thread context */
 	lock_init (&tid_lock);
 	list_init (&ready_list);
+	list_init (&sleep_list);
 	list_init (&destruction_req);
 
 	/* Set up a thread structure for the running thread. */
 	initial_thread = running_thread ();
 	init_thread (initial_thread, "main", PRI_DEFAULT);
 	initial_thread->status = THREAD_RUNNING;
+	initial_thread->wakeup_ticks = 0;
 	initial_thread->tid = allocate_tid ();
 }
 
@@ -210,6 +218,8 @@ thread_create (const char *name, int priority,
 	return tid;
 }
 
+
+
 /* Puts the current thread to sleep.  It will not be scheduled
    again until awoken by thread_unblock().
 
@@ -290,6 +300,60 @@ thread_exit (void) {
 	intr_disable ();
 	do_schedule (THREAD_DYING);
 	NOT_REACHED ();
+}
+
+
+
+
+/* Wake the thread up. the current thread is moved from the sleep list to the ready list */
+void wake_up(int64_t ticks){
+	if (list_empty(&sleep_list))
+	    return;
+	struct list_elem* temp = list_begin(&sleep_list);
+	struct thread *t;
+
+	enum intr_level old_level;
+	old_level = intr_disable();
+	
+	for (temp; temp != list_end(&sleep_list); ){
+		t = list_entry(temp, struct thread, elem);
+		if (t->wakeup_ticks <= ticks){
+			temp = list_next(temp);
+			list_remove(&t->elem);
+			thread_unblock(t);
+		}
+		else {
+			break;
+		}
+	}
+	intr_set_level(old_level);
+}
+
+
+bool less_ticks(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED) {
+    struct thread *st_a = list_entry(a, struct thread, elem);
+    struct thread *st_b = list_entry(b, struct thread, elem);
+    return st_a->wakeup_ticks < st_b->wakeup_ticks;
+}
+
+/* Sleep the thread. the current thread is put to sleep until wakeup_ticks */
+void 
+thread_sleep(int64_t ticks){
+	struct thread *curr = thread_current ();
+	enum intr_level old_level;
+	ASSERT (!intr_context ());
+	old_level = intr_disable ();
+	curr->wakeup_ticks = ticks;
+	
+	if (curr != idle_thread){
+		list_insert_ordered(&sleep_list, &curr->elem, less_ticks, NULL);
+		do_schedule(THREAD_BLOCKED);
+	}
+	else{ // idle thread
+		do_schedule(THREAD_READY);
+	}
+	intr_set_level (old_level);
+	
 }
 
 /* Yields the CPU.  The current thread is not put to sleep and
@@ -405,6 +469,7 @@ init_thread (struct thread *t, const char *name, int priority) {
 
 	memset (t, 0, sizeof *t);
 	t->status = THREAD_BLOCKED;
+	t->wakeup_ticks = 0;
 	strlcpy (t->name, name, sizeof t->name);
 	t->tf.rsp = (uint64_t) t + PGSIZE - sizeof (void *);
 	t->priority = priority;

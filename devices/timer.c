@@ -28,6 +28,7 @@ static intr_handler_func timer_interrupt;
 static bool too_many_loops (unsigned loops);
 static void busy_wait (int64_t loops);
 static void real_time_sleep (int64_t num, int32_t denom);
+void wake_up();
 
 /* Sets up the 8254 Programmable Interval Timer (PIT) to
    interrupt PIT_FREQ times per second, and registers the
@@ -93,8 +94,11 @@ timer_sleep (int64_t ticks) {
 	int64_t start = timer_ticks ();
 
 	ASSERT (intr_get_level () == INTR_ON);
-	while (timer_elapsed (start) < ticks)
-		thread_yield ();
+
+	while(timer_elapsed (start) < ticks){ // ?? 왜 됨..? if 하면 안되는 이유?
+		thread_sleep(start + ticks);
+	}
+	
 }
 
 /* Suspends execution for approximately MS milliseconds. */
@@ -125,8 +129,16 @@ timer_print_stats (void) {
 static void
 timer_interrupt (struct intr_frame *args UNUSED) {
 	ticks++;
-	thread_tick ();
+	thread_tick ();  // update the cpu usage for running process
+	wake_up(ticks);
+
+	// update global tick
 }
+
+
+
+
+
 
 /* Returns true if LOOPS iterations waits for more than one timer
    tick, otherwise false. */
