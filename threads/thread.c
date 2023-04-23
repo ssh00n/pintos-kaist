@@ -32,6 +32,8 @@ static struct list ready_list;
 static struct list sleep_list;
 void thread_sleep(int64_t ticks);
 void wake_up(int64_t ticks);
+
+bool more_priority(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED);
 bool less_ticks(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED);
 
 /* Idle thread. */
@@ -326,9 +328,15 @@ void wake_up(int64_t ticks){
 			break;
 		}
 	}
+	list_sort(&ready_list, more_priority, NULL);
 	intr_set_level(old_level);
 }
 
+bool more_priority(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED) {
+    struct thread *st_a = list_entry(a, struct thread, elem);
+    struct thread *st_b = list_entry(b, struct thread, elem);
+    return st_a->priority > st_b->priority;
+}
 
 bool less_ticks(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED) {
     struct thread *st_a = list_entry(a, struct thread, elem);

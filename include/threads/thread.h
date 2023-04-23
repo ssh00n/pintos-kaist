@@ -121,6 +121,7 @@ static struct thread *next_thread_to_run (void);
 void wake_up(int64_t ticks);
 void thread_sleep(int64_t ticks);
 bool less_ticks(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED);
+bool more_priority(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED);
 /* ----------------------------------------- */
 void thread_init (void);
 void thread_start (void);
