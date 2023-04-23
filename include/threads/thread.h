@@ -92,6 +92,7 @@ struct thread {
 	char name[16];                      /* Name (for debugging purposes). */
 	int priority;                       /* Priority. */
 
+	int64_t wakeup_ticks;   /* wakeup ticks */
 	/* Shared between thread.c and synch.c. */
 	struct list_elem elem;              /* List element. */
 
@@ -114,6 +115,13 @@ struct thread {
    Controlled by kernel command-line option "-o mlfqs". */
 extern bool thread_mlfqs;
 
+/* -------- newly added functions ---------- */
+
+static struct thread *next_thread_to_run (void);
+void wake_up(int64_t ticks);
+void thread_sleep(int64_t ticks);
+bool less_ticks(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED);
+/* ----------------------------------------- */
 void thread_init (void);
 void thread_start (void);
 
