@@ -216,6 +216,7 @@ thread_create (const char *name, int priority,
 
 	/* Add to run queue. */
 	thread_unblock (t);
+	thread_yield();
 
 	return tid;
 }
@@ -384,6 +385,7 @@ thread_yield (void) {
 void
 thread_set_priority (int new_priority) {
 	thread_current ()->priority = new_priority;
+	thread_yield();
 }
 
 /* Returns the current thread's priority. */
@@ -493,8 +495,10 @@ static struct thread *
 next_thread_to_run (void) {
 	if (list_empty (&ready_list))
 		return idle_thread;
-	else
+	else{
+		list_sort(&ready_list, more_priority, NULL);
 		return list_entry (list_pop_front (&ready_list), struct thread, elem);
+	}
 }
 
 /* Use iretq to launch the thread */
