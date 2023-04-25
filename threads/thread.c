@@ -28,7 +28,8 @@
    that are ready to run but not actually running. */
 static struct list ready_list;
 
-/* Waiting List */
+/* Waiting List & Sleep List*/
+static struct list wait_list;
 static struct list sleep_list;
 void thread_sleep(int64_t ticks);
 void wake_up(int64_t ticks);
@@ -216,7 +217,8 @@ thread_create (const char *name, int priority,
 
 	/* Add to run queue. */
 	thread_unblock (t);
-	thread_yield();
+	if (thread_current()->priority < t->priority)
+		thread_yield();
 
 	return tid;
 }
