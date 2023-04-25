@@ -57,6 +57,7 @@ sema_init (struct semaphore *sema, unsigned value) {
    interrupts disabled, but if it sleeps then the next scheduled
    thread will probably turn interrupts back on. This is
    sema_down function. */
+
 void
 sema_down (struct semaphore *sema) {
 	enum intr_level old_level;
@@ -67,12 +68,31 @@ sema_down (struct semaphore *sema) {
 	old_level = intr_disable ();
 	while (sema->value == 0) {
 		list_insert_ordered(&sema->waiters, &thread_current()->elem, more_priority, NULL);
-		// list_push_back (&sema->waiters, &thread_current ()->elem);
-
 		thread_block ();
 	}
 	sema->value--;
 	intr_set_level (old_level);
+}
+
+/*
+	우선 순위가 낮은 스레드가 동작할 스레드의 락을 갖고 있는 경우, 우선 순위를 물려주어야한다. 
+
+*/
+void
+priority_donate(struct thread *giver,struct thread *taker){
+	taker->priority = giver->priority;
+
+	list_push_back(&(taker->donations), &(giver->donations_elem)); // 우선순위를 받는 스레드의 도네이션 리스트에 우선순위를 주는 스레드를 추가한다.
+	
+	// 우선순위를 받을 스레드가 대기하고 있는 락이 있다면 락을 갖고 있는 스레드에게도 우선순위를 부여한다. 
+	for(int i=0; i<8; i++){
+		if(taker->wait_on_lock == NULL){
+			break;
+		}
+		giver = taker;
+		taker = taker->wait_on_lock->holder;
+		taker->priority = giver->priority; 
+	}
 }
 
 /* Down or "P" operation on a semaphore, but only if the
@@ -116,14 +136,11 @@ sema_up (struct semaphore *sema) {
 	sema->value++;
 	if (!list_empty (&sema->waiters)){
 		t = list_entry (list_pop_front (&sema->waiters), struct thread, elem);
+
 		thread_unblock(t);
+		t->wait_on_lock = NULL;
 		if (thread_current()->priority < t->priority)
 			thread_yield();
-
-		// thread_unblock (list_entry (list_pop_front (&sema->waiters), struct thread, elem));
-		// if ( thread_current()->priority < list_entry(list_begin(&ready_list),struct thread, elem)){
-		// 		thread_yield();
-		// 			}
 	}
 	
 	intr_set_level (old_level);
@@ -200,7 +217,14 @@ lock_acquire (struct lock *lock) {
 	ASSERT (lock != NULL);
 	ASSERT (!intr_context ());
 	ASSERT (!lock_held_by_current_thread (lock));
-
+	
+	// 만약 락을 누군가가 갖고 있으면 => lock holder에게 우선순위 물려 주기
+	if(lock->holder != NULL){	
+		// printf("<%s> get lock! ", thread_current()->name);
+		priority_donate(thread_current(), lock->holder);
+		thread_current()->wait_on_lock = lock;
+	}	
+	
 	sema_down (&lock->semaphore);
 	lock->holder = thread_current ();
 }
@@ -224,6 +248,7 @@ lock_try_acquire (struct lock *lock) {
 	return success;
 }
 
+
 /* Releases LOCK, which must be owned by the current thread.
    This is lock_release function.
 
@@ -235,6 +260,39 @@ lock_release (struct lock *lock) {
 	ASSERT (lock != NULL);
 	ASSERT (lock_held_by_current_thread (lock));
 
+	// 반납할 스레드의 후원리스트에서 락에서 풀려날 스레드 제거하기
+	// 반납할 스레드 : 지금 동작 중인 스레드
+	struct thread *curr = thread_current();
+
+	// 락에서 풀려날 세마포어 : 세마포어의 웨이트 리스트에서 가장 큰 값
+	if(!list_empty(&lock->semaphore.waiters)){
+		struct thread *remove_donate_thread = list_entry(list_max (&lock->semaphore.waiters, more_priority, 0), struct thread, elem); 
+		
+		if(!list_empty(&curr->donations)){
+			list_remove(&remove_donate_thread->donations_elem);
+
+			// struct list_elem *start = list_begin (&curr->donations);
+			// printf(">> max thread name = %s\n", list_entry(start, struct thread, donations_elem)->name);
+			// printf("%d, %d, %d\n", list_begin(&curr->donations), list_begin(&curr->donations)->next->next, list_end(&curr->donations));
+			// printf(">> max thread name = %s\n", list_entry(start->next, struct thread, donations_elem)->name);
+			
+			
+			if(!list_empty(&curr->donations)){
+				struct thread *new_thread = list_entry(list_max(&curr->donations, more_priority, 0), struct thread, donations_elem);
+				if (new_thread->priority < curr->priority ){
+					curr->priority= new_thread-> priority;
+				}
+				// printf("\n>>>new change => %d,name = %s, max = %d", curr->priority, new_thread->name, new_thread->priority);
+			}	
+			else{
+				curr->priority=curr->origin_priority;
+				// printf("\n>>>original change => %d", curr->priority);
+			}	
+		}
+	}
+	// 남은 스레드에서 가장 큰 값으로바꿔주기
+	
+
 	lock->holder = NULL;
 	sema_up (&lock->semaphore);
 }
@@ -245,7 +303,6 @@ lock_release (struct lock *lock) {
 bool
 lock_held_by_current_thread (const struct lock *lock) {
 	ASSERT (lock != NULL);
-
 	return lock->holder == thread_current ();
 }
 

@@ -257,6 +257,7 @@ thread_unblock (struct thread *t) {
 	ASSERT (t->status == THREAD_BLOCKED);
 	list_push_back (&ready_list, &t->elem);
 	t->status = THREAD_READY;
+	
 	intr_set_level (old_level);
 }
 
@@ -484,7 +485,14 @@ init_thread (struct thread *t, const char *name, int priority) {
 	t->wakeup_ticks = 0;
 	strlcpy (t->name, name, sizeof t->name);
 	t->tf.rsp = (uint64_t) t + PGSIZE - sizeof (void *);
+	
+	t->origin_priority = priority;
 	t->priority = priority;
+	
+	list_init(&(t->donations));
+	
+
+	t->wait_on_lock = NULL;
 	t->magic = THREAD_MAGIC;
 }
 
