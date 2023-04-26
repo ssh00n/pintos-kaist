@@ -81,8 +81,9 @@ sema_down (struct semaphore *sema) {
 void
 priority_donate(struct thread *giver,struct thread *taker){
 	taker->priority = giver->priority;
-
-	list_push_back(&(taker->donations), &(giver->donations_elem)); // 우선순위를 받는 스레드의 도네이션 리스트에 우선순위를 주는 스레드를 추가한다.
+	
+	// 우선순위를 받는 스레드의 도네이션 리스트에 우선순위를 주는 스레드를 추가한다.
+	list_push_back(&(taker->donations), &(giver->donations_elem)); 
 	
 	// 우선순위를 받을 스레드가 대기하고 있는 락이 있다면 락을 갖고 있는 스레드에게도 우선순위를 부여한다. 
 	for(int i=0; i<8; i++){
@@ -264,19 +265,19 @@ lock_release (struct lock *lock) {
 	// 반납할 스레드 : 지금 동작 중인 스레드
 	struct thread *curr = thread_current();
 
-	// 락에서 풀려날 세마포어 : 세마포어의 웨이트 리스트에서 가장 큰 값
+	// 락을 대기 중인 스레드가 있으면? 
 	if(!list_empty(&lock->semaphore.waiters)){
-		struct thread *remove_donate_thread = list_entry(list_max (&lock->semaphore.waiters, more_priority, 0), struct thread, elem); 
-		
+		// 내 후원 리스트에서 지울 스레드 찾기
 		if(!list_empty(&curr->donations)){
-			list_remove(&remove_donate_thread->donations_elem);
-
-			// struct list_elem *start = list_begin (&curr->donations);
-			// printf(">> max thread name = %s\n", list_entry(start, struct thread, donations_elem)->name);
-			// printf("%d, %d, %d\n", list_begin(&curr->donations), list_begin(&curr->donations)->next->next, list_end(&curr->donations));
-			// printf(">> max thread name = %s\n", list_entry(start->next, struct thread, donations_elem)->name);
-			
-			
+			// donations를 돌면서 제거한다. 
+			struct list_elem *start= list_begin(&curr->donations);
+			while(start != NULL){
+				// 만약 지금 락이랑 같은 락을 대기중인 후원자들이 있으면 전부 제거하기
+  				if(lock == list_entry(start, struct thread, donations_elem)->wait_on_lock){
+					list_remove(start);
+				} 
+				start = start->next;
+			}
 			if(!list_empty(&curr->donations)){
 				struct thread *new_thread = list_entry(list_max(&curr->donations, more_priority, 0), struct thread, donations_elem);
 				if (new_thread->priority < curr->priority ){
@@ -290,9 +291,7 @@ lock_release (struct lock *lock) {
 			}	
 		}
 	}
-	// 남은 스레드에서 가장 큰 값으로바꿔주기
-	
-
+	// curr->priority=curr->origin_priority;
 	lock->holder = NULL;
 	sema_up (&lock->semaphore);
 }
