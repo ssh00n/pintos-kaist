@@ -92,6 +92,12 @@ struct thread {
 	char name[16];                      /* Name (for debugging purposes). */
 	int priority;                       /* Priority. */
 
+	int original_priority;				/* Use to memorize priority before donation */
+
+	struct lock *wait_on_lock;
+	struct list donations;				/* donators */
+	struct list_elem d_elem; 			/* donation list element */
+
 	int64_t wakeup_ticks;   /* wakeup ticks */
 	/* Shared between thread.c and synch.c. */
 	struct list_elem elem;              /* List element. */
@@ -116,10 +122,14 @@ struct thread {
 extern bool thread_mlfqs;
 
 /* -------- newly added functions ---------- */
+void donate_priority();
+void remove_donators(struct lock *lock);
+void restore_priority();
 
 static struct thread *next_thread_to_run (void);
 void wake_up(int64_t ticks);
 void thread_sleep(int64_t ticks);
+
 bool less_ticks(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED);
 bool more_priority(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED);
 /* ----------------------------------------- */
