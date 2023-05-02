@@ -40,6 +40,7 @@ process_init (void) {
  * Notice that THIS SHOULD BE CALLED ONCE. */
 tid_t
 process_create_initd (const char *file_name) {
+	
 	char *fn_copy;
 	tid_t tid;
 
@@ -50,25 +51,31 @@ process_create_initd (const char *file_name) {
 		return TID_ERROR;
 	strlcpy (fn_copy, file_name, PGSIZE);
 
+	char * save_ptr = file_name;
+	
 	/* Create a new thread to execute FILE_NAME. */
-	tid = thread_create (file_name, PRI_DEFAULT, initd, fn_copy);
+	tid = thread_create (strtok_r(save_ptr, " ", &save_ptr), PRI_DEFAULT, initd, fn_copy);
 	if (tid == TID_ERROR)
 		palloc_free_page (fn_copy);
+	
 	return tid;
+	
 }
 
 /* A thread function that launches first user process. */
 static void
 initd (void *f_name) {
+	
 #ifdef VM
 	supplemental_page_table_init (&thread_current ()->spt);
 #endif
-
 	process_init ();
-
-	if (process_exec (f_name) < 0)
+	
+	if (process_exec (f_name) < 0){
 		PANIC("Fail to launch initd\n");
+	}
 	NOT_REACHED ();
+
 }
 
 /* Clones the current process as `name`. Returns the new process's thread id, or
@@ -154,9 +161,45 @@ __do_fork (void *aux) {
 	/* Finally, switch to the newly created process. */
 	if (succ)
 		do_iret (&if_);
-error:
+		error:
 	thread_exit ();
 }
+void argument_stack(int argc, char **argv, struct intr_frame *if_) {
+	char *arg_address[128];
+
+
+	for (int i = argc - 1; i >= 0; i--) {   
+		int argv_len = strlen(argv[i]);
+		if_->rsp = if_->rsp - (argv_len + 1);
+		memcpy(if_->rsp, argv[i], argv_len + 1);
+		arg_address[i] = if_->rsp;
+	}
+
+	// 패딩 넣어주기
+	while (if_->rsp % 8 != 0) {
+		if_->rsp--;
+		*(uint8_t *)(if_ -> rsp) = 0;
+	}
+
+	/* Insert addresses of strings including sentinel */
+	for (int i = argc; i >= 0; i--) {
+		if_->rsp = if_->rsp - 8; // 스택 값 올리기
+
+		if (i == argc) // 마지막에는 구분 컨벤션 넣어주기
+		{
+			memset(if_->rsp, 0, sizeof(char **));
+		}
+		else // 값 넣기
+			memcpy(if_->rsp, &arg_address[i], sizeof(char **));
+	}
+	
+	if_->rsp = if_->rsp - 8;           // 스택 값 올리고 값 추가
+	memset(if_->rsp, 0, sizeof(void *)); // 가짜 반환 값 푸시
+
+	if_->R.rdi = argc;                   // argc 넣기
+	if_->R.rsi = if_->rsp + 8; 		   // argv 반환 값에서 -8 한 값 넣기
+}
+
 
 /* Switch the current execution context to the f_name.
  * Returns -1 on fail. */
@@ -164,7 +207,7 @@ int
 process_exec (void *f_name) {
 	char *file_name = f_name;
 	bool success;
-
+	
 	/* We cannot use the intr_frame in the thread structure.
 	 * This is because when current thread rescheduled,
 	 * it stores the execution information to the member. */
@@ -172,21 +215,37 @@ process_exec (void *f_name) {
 	_if.ds = _if.es = _if.ss = SEL_UDSEG;
 	_if.cs = SEL_UCSEG;
 	_if.eflags = FLAG_IF | FLAG_MBS;
-
+	
 	/* We first kill the current context */
 	process_cleanup ();
 
-	/* And then load the binary */
+	char * save_ptr = file_name;
+	char *args[48];
+	int argc=0; 
+	
+	// arg 파싱
+	while((args[argc] = strtok_r(save_ptr, " ", &save_ptr)) != NULL){
+		argc++;
+	}
+	
 	success = load (file_name, &_if);
-
+	/* And then load the binary */
+	
+	argument_stack(argc, args, &_if); 
+	
 	/* If load failed, quit. */
-	palloc_free_page (file_name);
+	// palloc_free_page (args[0]);
+	
+	
 	if (!success)
 		return -1;
-
+	
 	/* Start switched process. */
 	do_iret (&_if);
+	
+
 	NOT_REACHED ();
+
 }
 
 
@@ -204,19 +263,24 @@ process_wait (tid_t child_tid UNUSED) {
 	/* XXX: Hint) The pintos exit if process_wait (initd), we recommend you
 	 * XXX:       to add infinite loop here before
 	 * XXX:       implementing the process_wait. */
+	// while(true){
+	// 	continue;
+	// }
 	return -1;
 }
 
 /* Exit the process. This function is called by thread_exit (). */
 void
 process_exit (void) {
+	
 	struct thread *curr = thread_current ();
 	/* TODO: Your code goes here.
 	 * TODO: Implement process termination message (see
 	 * TODO: project2/process_termination.html).
 	 * TODO: We recommend you to implement process resource cleanup here. */
-
+	
 	process_cleanup ();
+	
 }
 
 /* Free the current process's resources. */
@@ -341,7 +405,6 @@ load (const char *file_name, struct intr_frame *if_) {
 		printf ("load: %s: open failed\n", file_name);
 		goto done;
 	}
-
 	/* Read and verify executable header. */
 	if (file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr
 			|| memcmp (ehdr.e_ident, "\177ELF\2\1\1", 7)
@@ -353,7 +416,7 @@ load (const char *file_name, struct intr_frame *if_) {
 		printf ("load: %s: error loading executable\n", file_name);
 		goto done;
 	}
-
+	
 	/* Read program headers. */
 	file_ofs = ehdr.e_phoff;
 	for (i = 0; i < ehdr.e_phnum; i++) {
@@ -539,7 +602,7 @@ static bool
 setup_stack (struct intr_frame *if_) {
 	uint8_t *kpage;
 	bool success = false;
-
+	
 	kpage = palloc_get_page (PAL_USER | PAL_ZERO);
 	if (kpage != NULL) {
 		success = install_page (((uint8_t *) USER_STACK) - PGSIZE, kpage, true);
@@ -628,7 +691,7 @@ static bool
 setup_stack (struct intr_frame *if_) {
 	bool success = false;
 	void *stack_bottom = (void *) (((uint8_t *) USER_STACK) - PGSIZE);
-
+	
 	/* TODO: Map the stack on stack_bottom and claim the page immediately.
 	 * TODO: If success, set the rsp accordingly.
 	 * TODO: You should mark the page is stack. */
