@@ -83,10 +83,11 @@ initd (void *f_name) {
 tid_t
 process_fork (const char *name, struct intr_frame *if_ UNUSED) {
 	/* Clone current thread to new thread.*/
-	
+	struct thread* cur = thread_current();
+	memcpy(&cur->pf, if_, sizeof(struct intr_frame));
 	
 	return thread_create (name,
-			PRI_DEFAULT, __do_fork, thread_current ());
+			PRI_DEFAULT, __do_fork, cur);
 }
 
 #ifndef VM
@@ -131,7 +132,7 @@ __do_fork (void *aux) {
 	struct thread *parent = (struct thread *) aux; // parent thread
 	struct thread *current = thread_current ();
 	/* TODO: somehow pass the parent_if. (i.e. process_fork()'s if_) */
-	struct intr_frame *parent_if;
+	struct intr_frame *parent_if = &parent->pf;
 	bool succ = true;
 
 	/* 1. Read the cpu context to local stack. */
@@ -198,14 +199,6 @@ process_exec (void *f_name) {
 		argv[argc++] = token;
 		token = strtok_r(NULL, " ", &saveptr);		
 	}
-	
-	// NULL 값 들어가도록 수정하기
-
-	printf("argv[0]: %s \n", argv[0]);
-	printf("argv[1]: %s \n", argv[1]); // one arg
-	printf("argc : %d\n", argc);
-
-	
 
 	/* And then load the binary */
 	success = load (argv[0], &_if);
@@ -272,8 +265,7 @@ process_wait (tid_t child_tid UNUSED) {
 	// In exit() of process tid, call sema_up
 	// Where do we need to place sema_down and sema_up?
 	
-
-	while(true){
+	for (int i =0; i<1000000000; i++){
 		;
 	}
 	/* XXX: Hint) The pintos exit if process_wait (initd), we recommend you
@@ -286,6 +278,7 @@ process_wait (tid_t child_tid UNUSED) {
 void
 process_exit (void) {
 	struct thread *curr = thread_current ();
+	// syscall write ("Name of process: exit(status)")
 	/* TODO: Your code goes here.
 	 * TODO: Implement process termination message (see
 	 * TODO: project2/process_termination.html).
