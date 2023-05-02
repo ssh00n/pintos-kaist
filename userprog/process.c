@@ -22,10 +22,14 @@
 #include "vm/vm.h"
 #endif
 
+#define MAX_ARGS 14
+
 static void process_cleanup (void);
 static bool load (const char *file_name, struct intr_frame *if_);
 static void initd (void *f_name);
 static void __do_fork (void *);
+
+void push_args(char **argv, int argc, struct intr_frame *if_);
 
 /* General process initializer for initd and other process. */
 static void
@@ -40,6 +44,9 @@ process_init (void) {
  * Notice that THIS SHOULD BE CALLED ONCE. */
 tid_t
 process_create_initd (const char *file_name) {
+	// char *name_of_process, *save_ptr;
+	// name_of_process = strtok_r (file_name, " ", &save_ptr); // this token is the name of new process to thread_create() function
+	
 	char *fn_copy;
 	tid_t tid;
 
@@ -76,8 +83,11 @@ initd (void *f_name) {
 tid_t
 process_fork (const char *name, struct intr_frame *if_ UNUSED) {
 	/* Clone current thread to new thread.*/
+	struct thread* cur = thread_current();
+	memcpy(&cur->pf, if_, sizeof(struct intr_frame));
+	
 	return thread_create (name,
-			PRI_DEFAULT, __do_fork, thread_current ());
+			PRI_DEFAULT, __do_fork, cur);
 }
 
 #ifndef VM
@@ -119,10 +129,10 @@ duplicate_pte (uint64_t *pte, void *va, void *aux) {
 static void
 __do_fork (void *aux) {
 	struct intr_frame if_;
-	struct thread *parent = (struct thread *) aux;
+	struct thread *parent = (struct thread *) aux; // parent thread
 	struct thread *current = thread_current ();
 	/* TODO: somehow pass the parent_if. (i.e. process_fork()'s if_) */
-	struct intr_frame *parent_if;
+	struct intr_frame *parent_if = &parent->pf;
 	bool succ = true;
 
 	/* 1. Read the cpu context to local stack. */
@@ -158,10 +168,12 @@ error:
 	thread_exit ();
 }
 
+
 /* Switch the current execution context to the f_name.
  * Returns -1 on fail. */
 int
-process_exec (void *f_name) {
+process_exec (void *f_name) {		
+								
 	char *file_name = f_name;
 	bool success;
 
@@ -176,8 +188,25 @@ process_exec (void *f_name) {
 	/* We first kill the current context */
 	process_cleanup ();
 
+	char *token, *saveptr;
+	char *argv[128];
+	int argc = 0;
+
+	// Parse command into executable file, options, and other arguments
+	
+	token = strtok_r(file_name, " ", &saveptr);
+	while (token != NULL) {
+		argv[argc++] = token;
+		token = strtok_r(NULL, " ", &saveptr);		
+	}
+
 	/* And then load the binary */
-	success = load (file_name, &_if);
+	success = load (argv[0], &_if);
+
+	push_args(argv, argc, &_if);	
+
+	size_t byte_size = USER_STACK-(uint64_t)_if.rsp;
+	hex_dump(_if.rsp, _if.rsp, byte_size, true);
 
 	/* If load failed, quit. */
 	palloc_free_page (file_name);
@@ -188,6 +217,35 @@ process_exec (void *f_name) {
 	do_iret (&_if);
 	NOT_REACHED ();
 }
+
+void push_args(char **argv, int argc, struct intr_frame *if_){
+	char *arg_address[128];
+	
+	for (int i=argc-1; i>=0; i--){
+		size_t arg_size = strlen(argv[i]) + 1;  // include sentinel (\0)
+		if_->rsp -= arg_size;        // 인자 크기만큼 스택을 늘려줌
+		memcpy(if_->rsp, argv[i], arg_size);
+		arg_address[i] = if_->rsp;	// arg_address에 인자를 복사해준 주소값을 저장
+	}
+
+	while((uintptr_t)if_->rsp % 8 != 0){
+		if_->rsp--;
+		*(uint8_t *)if_->rsp = 0;
+	}
+
+	for (int i=argc-1; i>=0; i--){
+		if_->rsp -= sizeof(char *);
+		memcpy(if_->rsp, &arg_address[i], sizeof(char *));
+	}
+
+	if_->R.rdi = argc;
+	if_->R.rsi = arg_address[0];
+
+	uint64_t tmp = 0;
+	if_->rsp -= sizeof(void *);
+	memcpy(if_->rsp, &tmp, sizeof(void (*)));
+}
+
 
 
 /* Waits for thread TID to die and returns its exit status.  If
@@ -201,6 +259,15 @@ process_exec (void *f_name) {
  * does nothing. */
 int
 process_wait (tid_t child_tid UNUSED) {
+	// Add a semaphore for "wait" to thread structure
+	// Semaphore is initialized to 0 when the thread is first created.
+	// In wait(tid), call sema_down for the semaphore of tid.
+	// In exit() of process tid, call sema_up
+	// Where do we need to place sema_down and sema_up?
+	
+	for (int i =0; i<1000000000; i++){
+		;
+	}
 	/* XXX: Hint) The pintos exit if process_wait (initd), we recommend you
 	 * XXX:       to add infinite loop here before
 	 * XXX:       implementing the process_wait. */
@@ -211,6 +278,7 @@ process_wait (tid_t child_tid UNUSED) {
 void
 process_exit (void) {
 	struct thread *curr = thread_current ();
+	// syscall write ("Name of process: exit(status)")
 	/* TODO: Your code goes here.
 	 * TODO: Implement process termination message (see
 	 * TODO: project2/process_termination.html).
@@ -246,7 +314,7 @@ process_cleanup (void) {
 	}
 }
 
-/* Sets up the CPU for running user code in the nest thread.
+/* Sets up the CPU for running user code in the next thread.
  * This function is called on every context switch. */
 void
 process_activate (struct thread *next) {
