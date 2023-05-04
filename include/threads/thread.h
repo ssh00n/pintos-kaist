@@ -28,6 +28,9 @@ typedef int tid_t;
 #define PRI_DEFAULT 31                  /* Default priority. */
 #define PRI_MAX 63                      /* Highest priority. */
 
+#define FDT_PAGES 3 // pages allocate for file descriptor tables (thread_create,process_exit)
+#define FDCOUNT_LIMIT FDT_PAGES *(1 << 9) // fd_idx limit
+
 /* A kernel thread or user process.
  *
  * Each thread structure is stored in its own 4 kB page.  The
@@ -98,6 +101,7 @@ struct thread {
 	struct list donations;				/* donators */
 	struct list_elem d_elem; 			/* donation list element */
 
+
 	int64_t wakeup_ticks;   /* wakeup ticks */
 	/* Shared between thread.c and synch.c. */
 	struct list_elem elem;              /* List element. */
@@ -105,12 +109,19 @@ struct thread {
 #ifdef USERPROG
 	/* Owned by userprog/process.c. */
 	uint64_t *pml4;                     /* Page map level 4 */
+	
 #endif
 #ifdef VM
 	/* Table for whole virtual memory owned by thread. */
 	struct supplemental_page_table spt;
 #endif
 
+    struct file **fdt; /* Array of pointers to struct file */
+	int next_fd;		/* Next available file descriptor */
+
+	short exit_code;
+	// struct semaphore fork_sema;
+	struct intr_frame pf;					// parent interrupt frame
 	/* Owned by thread.c. */
 	struct intr_frame tf;               /* Information for switching */
 	unsigned magic;                     /* Detects stack overflow. */

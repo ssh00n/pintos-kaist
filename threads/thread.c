@@ -204,8 +204,15 @@ thread_create (const char *name, int priority,
 
 	/* Initialize thread. */
 	init_thread (t, name, priority);
+	t->fdt = palloc_get_multiple(PAL_ZERO, FDT_PAGES);
+	if (t->fdt == NULL){
+		return TID_ERROR;
+	}
+	t->next_fd = 2;
 	
 	tid = t->tid = allocate_tid ();
+
+	// in Pintos, context of thread is saved in struct tf
 
 	/* Call the kernel_thread if it scheduled.
 	 * Note) rdi is 1st argument, and rsi is 2nd argument. */

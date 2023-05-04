@@ -44,8 +44,6 @@ process_init (void) {
  * Notice that THIS SHOULD BE CALLED ONCE. */
 tid_t
 process_create_initd (const char *file_name) {
-	// char *name_of_process, *save_ptr;
-	// name_of_process = strtok_r (file_name, " ", &save_ptr); // this token is the name of new process to thread_create() function
 	
 	char *fn_copy;
 	tid_t tid;
@@ -57,8 +55,9 @@ process_create_initd (const char *file_name) {
 		return TID_ERROR;
 	strlcpy (fn_copy, file_name, PGSIZE);
 
+	char *save_ptr = file_name;
 	/* Create a new thread to execute FILE_NAME. */
-	tid = thread_create (file_name, PRI_DEFAULT, initd, fn_copy);
+	tid = thread_create (strtok_r(save_ptr, " ", &save_ptr), PRI_DEFAULT, initd, fn_copy);
 	if (tid == TID_ERROR)
 		palloc_free_page (fn_copy);
 	return tid;
@@ -152,7 +151,7 @@ __do_fork (void *aux) {
 	if (!pml4_for_each (parent->pml4, duplicate_pte, parent))
 		goto error;
 #endif
-
+	
 	/* TODO: Your code goes here.
 	 * TODO: Hint) To duplicate the file object, use `file_duplicate`
 	 * TODO:       in include/filesys/file.h. Note that parent should not return
@@ -206,7 +205,7 @@ process_exec (void *f_name) {
 	push_args(argv, argc, &_if);	
 
 	size_t byte_size = USER_STACK-(uint64_t)_if.rsp;
-	hex_dump(_if.rsp, _if.rsp, byte_size, true);
+	// hex_dump(_if.rsp, _if.rsp, byte_size, true);
 
 	/* If load failed, quit. */
 	palloc_free_page (file_name);
@@ -232,18 +231,24 @@ void push_args(char **argv, int argc, struct intr_frame *if_){
 		if_->rsp--;
 		*(uint8_t *)if_->rsp = 0;
 	}
-
-	for (int i=argc-1; i>=0; i--){
+	
+	for (int i=argc; i>=0; i--){
 		if_->rsp -= sizeof(char *);
+
+		if (i == argc){
+			memset(if_->rsp, 0, sizeof(char *));
+		}
+		else{
 		memcpy(if_->rsp, &arg_address[i], sizeof(char *));
+		}
 	}
 
-	if_->R.rdi = argc;
-	if_->R.rsi = arg_address[0];
-
-	uint64_t tmp = 0;
 	if_->rsp -= sizeof(void *);
-	memcpy(if_->rsp, &tmp, sizeof(void (*)));
+	memset(if_->rsp, 0, sizeof(void (*)));
+
+	if_->R.rdi = argc;
+	if_->R.rsi = if_->rsp + sizeof(void *);
+
 }
 
 
@@ -265,7 +270,7 @@ process_wait (tid_t child_tid UNUSED) {
 	// In exit() of process tid, call sema_up
 	// Where do we need to place sema_down and sema_up?
 	
-	for (int i =0; i<1000000000; i++){
+	for (int i =0; i<100000000; i++){
 		;
 	}
 	/* XXX: Hint) The pintos exit if process_wait (initd), we recommend you
@@ -278,12 +283,18 @@ process_wait (tid_t child_tid UNUSED) {
 void
 process_exit (void) {
 	struct thread *curr = thread_current ();
+
+	// deallocate_fdt(curr);
+	// 1. clear children list -> todo when implementing fork(), exec(), wait()
+	// 2. clear fd list (close all files)
+	// 3. deallocate the file descriptor table
+
 	// syscall write ("Name of process: exit(status)")
 	/* TODO: Your code goes here.
 	 * TODO: Implement process termination message (see
 	 * TODO: project2/process_termination.html).
 	 * TODO: We recommend you to implement process resource cleanup here. */
-
+	
 	process_cleanup ();
 }
 
@@ -409,7 +420,9 @@ load (const char *file_name, struct intr_frame *if_) {
 		printf ("load: %s: open failed\n", file_name);
 		goto done;
 	}
-
+	/* Do not allow the file to be modified when it is opend for execution */
+	// file_deny_write(file);
+	
 	/* Read and verify executable header. */
 	if (file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr
 			|| memcmp (ehdr.e_ident, "\177ELF\2\1\1", 7)
