@@ -4,7 +4,10 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
+#include "filesys/file.h"
 #include "threads/interrupt.h"
+#include "threads/synch.h"
+
 #ifdef VM
 #include "vm/vm.h"
 #endif
@@ -101,6 +104,15 @@ struct thread {
 	int64_t wakeup_ticks;   /* wakeup ticks */
 	/* Shared between thread.c and synch.c. */
 	struct list_elem elem;              /* List element. */
+
+	//project2 - 시스템 콜 구현
+	struct list childs;				/* childs */
+	struct list_elem child_elem; 			/* child list elem */
+
+	struct semaphore process_wait;
+
+	struct file *fdt[64];
+	int next_fd;
 
 #ifdef USERPROG
 	/* Owned by userprog/process.c. */

@@ -103,6 +103,7 @@ static uint64_t gdt[3] = { 0, 0x00af9a000000ffff, 0x00cf92000000ffff };
 
    It is not safe to call thread_current() until this function
    finishes. */
+
 void
 thread_init (void) {
 	ASSERT (intr_get_level () == INTR_OFF);
@@ -118,9 +119,12 @@ thread_init (void) {
 
 	/* Init the globla thread context */
 	lock_init (&tid_lock);
+	
 	list_init (&ready_list);
 	list_init (&sleep_list);
 	list_init (&destruction_req);
+
+	
 	/* Set up a thread structure for the running thread. */
 	initial_thread = running_thread ();
 	init_thread (initial_thread, "main", PRI_DEFAULT);
@@ -191,7 +195,7 @@ thread_print_stats (void) {
    Priority scheduling is the goal of Problem 1-3. */
 tid_t
 thread_create (const char *name, int priority,
-		thread_func *function, void *aux) {
+	thread_func *function, void *aux) {
 	struct thread *t;
 	tid_t tid;
 
@@ -218,10 +222,14 @@ thread_create (const char *name, int priority,
 	t->tf.cs = SEL_KCSEG;
 	t->tf.eflags = FLAG_IF;
 
+
+	list_push_back(&thread_current()->childs, &t->child_elem);
+
+
 	/* Add to run queue. */
 	thread_unblock (t);
-	if (thread_current()->priority < t->priority)
-		thread_yield();
+	// if (thread_current()->priority < t->priority)
+	thread_yield();
 
 	return tid;
 }
@@ -299,18 +307,17 @@ thread_tid (void) {
 void
 thread_exit (void) {
 	ASSERT (!intr_context ());
-
+	
 #ifdef USERPROG
 	process_exit ();
 #endif
-
+	sema_up(&thread_current()->process_wait);
 	/* Just set our status to dying and schedule another process.
 	   We will be destroyed during the call to schedule_tail(). */
 	intr_disable ();
 	do_schedule (THREAD_DYING);
 	NOT_REACHED ();
 }
-
 
 void donate_priority(){
 	struct thread *curr = thread_current();
@@ -542,7 +549,16 @@ init_thread (struct thread *t, const char *name, int priority) {
 	t->wait_on_lock = NULL;
 	t->priority = priority;
 	t->original_priority = priority;
-	
+
+	// project2 시스템 콜 
+	list_init (&t->childs);
+	sema_init (&t->process_wait, 0);
+
+	t->next_fd = 3;
+	for(int i=0; i<64; i++){
+		memset(&t->fdt[i], 0, sizeof(void *));
+	}
+
 	t->magic = THREAD_MAGIC;
 }
 

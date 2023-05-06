@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <user/syscall.h>
 #include "userprog/gdt.h"
 #include "userprog/tss.h"
 #include "filesys/directory.h"
@@ -51,14 +52,18 @@ process_create_initd (const char *file_name) {
 	tid_t tid;
 
 	/* Make a copy of FILE_NAME.
-	 * Otherwise there's a race between the caller and load(). */
+	 * Otherwise there's a between the caller and load(). */
 	fn_copy = palloc_get_page (0);
 	if (fn_copy == NULL)
 		return TID_ERROR;
 	strlcpy (fn_copy, file_name, PGSIZE);
 
 	/* Create a new thread to execute FILE_NAME. */
-	tid = thread_create (file_name, PRI_DEFAULT, initd, fn_copy);
+	// tid = thread_create (file_name, PRI_DEFAULT, initd, fn_copy);
+
+	char * save_ptr = file_name;
+	tid = thread_create (strtok_r(save_ptr, " ", &save_ptr), PRI_DEFAULT, initd, fn_copy);
+	
 	if (tid == TID_ERROR)
 		palloc_free_page (fn_copy);
 	return tid;
@@ -84,7 +89,7 @@ tid_t
 process_fork (const char *name, struct intr_frame *if_ UNUSED) {
 	/* Clone current thread to new thread.*/
 	struct thread* cur = thread_current();
-	memcpy(&cur->pf, if_, sizeof(struct intr_frame));
+	memcpy(&cur->tf, if_, sizeof(struct intr_frame));
 	
 	return thread_create (name,
 			PRI_DEFAULT, __do_fork, cur);
@@ -132,7 +137,7 @@ __do_fork (void *aux) {
 	struct thread *parent = (struct thread *) aux; // parent thread
 	struct thread *current = thread_current ();
 	/* TODO: somehow pass the parent_if. (i.e. process_fork()'s if_) */
-	struct intr_frame *parent_if = &parent->pf;
+	struct intr_frame *parent_if = &parent->tf;
 	bool succ = true;
 
 	/* 1. Read the cpu context to local stack. */
@@ -168,15 +173,48 @@ error:
 	thread_exit ();
 }
 
+void argument_stack(int argc, char **argv, struct intr_frame *if_) {
+	char *arg_address[128];
+
+
+	for (int i = argc - 1; i >= 0; i--) {   
+		int argv_len = strlen(argv[i]);
+		if_->rsp = if_->rsp - (argv_len + 1);
+		memcpy(if_->rsp, argv[i], argv_len + 1);
+		arg_address[i] = if_->rsp;
+	}
+
+	// 패딩 넣어주기
+	while (if_->rsp % 8 != 0) {
+		if_->rsp--;
+		*(uint8_t *)(if_ -> rsp) = 0;
+	}
+
+	/* Insert addresses of strings including sentinel */
+	for (int i = argc; i >= 0; i--) {
+		if_->rsp = if_->rsp - 8; // 스택 값 올리기
+
+		if (i == argc) // 마지막에는 구분 컨벤션 넣어주기
+		{
+			memset(if_->rsp, 0, sizeof(char **));
+		}
+		else // 값 넣기
+			memcpy(if_->rsp, &arg_address[i], sizeof(char **));
+	}
+	
+	if_->rsp = if_->rsp - 8;           // 스택 값 올리고 값 추가
+	memset(if_->rsp, 0, sizeof(void *)); // 가짜 반환 값 푸시
+
+	if_->R.rdi = argc;                   // argc 넣기
+	if_->R.rsi = if_->rsp + 8; 		   // argv 반환 값에서 -8 한 값 넣기
+}
 
 /* Switch the current execution context to the f_name.
  * Returns -1 on fail. */
 int
-process_exec (void *f_name) {		
-								
+process_exec (void *f_name) {
 	char *file_name = f_name;
 	bool success;
-
 	/* We cannot use the intr_frame in the thread structure.
 	 * This is because when current thread rescheduled,
 	 * it stores the execution information to the member. */
@@ -185,36 +223,35 @@ process_exec (void *f_name) {
 	_if.cs = SEL_UCSEG;
 	_if.eflags = FLAG_IF | FLAG_MBS;
 
+	char * save_ptr = file_name;
+	char *args[48];
+	int argc=0; 
+	
+	// arg 파싱
+	while((args[argc] = strtok_r(save_ptr, " ", &save_ptr)) != NULL){
+		argc++;
+	}
 	/* We first kill the current context */
 	process_cleanup ();
 
-	char *token, *saveptr;
-	char *argv[128];
-	int argc = 0;
-
-	// Parse command into executable file, options, and other arguments
+	printf(">> before load~\n");
 	
-	token = strtok_r(file_name, " ", &saveptr);
-	while (token != NULL) {
-		argv[argc++] = token;
-		token = strtok_r(NULL, " ", &saveptr);		
-	}
-
+	success = load (file_name, &_if);
 	/* And then load the binary */
-	success = load (argv[0], &_if);
 
-	push_args(argv, argc, &_if);	
+	printf(">> after load~\n");
 
-	size_t byte_size = USER_STACK-(uint64_t)_if.rsp;
-	hex_dump(_if.rsp, _if.rsp, byte_size, true);
-
+	argument_stack(argc, args, &_if); 
+	
 	/* If load failed, quit. */
-	palloc_free_page (file_name);
+	// palloc_free_page (args[0]);
+	
 	if (!success)
 		return -1;
-
+	
 	/* Start switched process. */
 	do_iret (&_if);
+
 	NOT_REACHED ();
 }
 
@@ -246,8 +283,6 @@ void push_args(char **argv, int argc, struct intr_frame *if_){
 	memcpy(if_->rsp, &tmp, sizeof(void (*)));
 }
 
-
-
 /* Waits for thread TID to die and returns its exit status.  If
  * it was terminated by the kernel (i.e. killed due to an
  * exception), returns -1.  If TID is invalid or if it was not a
@@ -265,13 +300,18 @@ process_wait (tid_t child_tid UNUSED) {
 	// In exit() of process tid, call sema_up
 	// Where do we need to place sema_down and sema_up?
 	
-	for (int i =0; i<1000000000; i++){
-		;
-	}
-	/* XXX: Hint) The pintos exit if process_wait (initd), we recommend you
-	 * XXX:       to add infinite loop here before
-	 * XXX:       implementing the process_wait. */
-	return -1;
+	// 자식 스레드에서 같은 tid를 가진 스레드를 찾아서 세마포어 값을 내린다. 
+	struct thread *curr = thread_current();
+	struct list_elem *child = list_begin(&curr->childs);
+	for(; child != NULL; child = child->next){
+		struct thread *child_thread = list_entry(child, struct thread, child_elem);
+		if(child_thread->tid == child_tid){
+			sema_down(&child_thread->process_wait);
+			break;
+		}
+	} 
+	
+	return 0;
 }
 
 /* Exit the process. This function is called by thread_exit (). */
@@ -396,12 +436,12 @@ load (const char *file_name, struct intr_frame *if_) {
 	off_t file_ofs;
 	bool success = false;
 	int i;
-
 	/* Allocate and activate page directory. */
 	t->pml4 = pml4_create ();
 	if (t->pml4 == NULL)
 		goto done;
 	process_activate (thread_current ());
+	
 
 	/* Open executable file. */
 	file = filesys_open (file_name);
@@ -409,6 +449,8 @@ load (const char *file_name, struct intr_frame *if_) {
 		printf ("load: %s: open failed\n", file_name);
 		goto done;
 	}
+
+	printf(">>>>> check!!\n");
 
 	/* Read and verify executable header. */
 	if (file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr
