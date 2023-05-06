@@ -1,4 +1,5 @@
 #include "userprog/process.h"
+// #include "userprog/syscall.h"
 #include <debug.h>
 #include <inttypes.h>
 #include <round.h>
@@ -26,6 +27,7 @@ static void process_cleanup(void);
 static bool load(const char *file_name, struct intr_frame *if_);
 static void initd(void *f_name);
 static void __do_fork(void *);
+struct thread *get_child_process(int pid);
 
 /* General process initializer for initd and other process. */
 static void
@@ -80,9 +82,25 @@ initd(void *f_name)
  * TID_ERROR if the thread cannot be created. */
 tid_t process_fork(const char *name, struct intr_frame *if_ UNUSED)
 {
+	struct thread *cur = thread_current();
+	// 부모꺼 복사해서 do_fork에 넣을거임
+	memcpy(&cur->pf,if_,sizeof(struct intr_frame));
+
+	tid_t child_tid = thread_create(name,PRI_DEFAULT, __do_fork, thread_current());
+
+	struct thread *child = get_child_process(child_tid);
+	sema_down(&child->fork_sema);
+
+	// 자식이 비정상 종료일 때 , 0일 때가 정상
+	// 만약 부모 프로세스가 wait() 함수를 호출하지 않고 TID_ERROR를 반환한다면, 부모 프로세스는 자식 프로세스가 비정상적으로 종료된 사실을 알 수 없으며, 이로 인해 메모리 누수 등의 문제가 발생할 수 있습니다. 따라서, 부모 프로세스는 자식 프로세스가 종료되었는지를 확인하고 적절한 처리를 수행하기 위해 wait() 함수를 호출해야 합니다.
+
+	if (child->exit_status == -1){
+		// return TID_ERROR;
+		return process_wait(child_tid);
+	}
+
 	/* Clone current thread to new thread.*/
-	return thread_create(name,
-						 PRI_DEFAULT, __do_fork, thread_current());
+	return child_tid;
 }
 
 #ifndef VM
@@ -98,22 +116,30 @@ duplicate_pte(uint64_t *pte, void *va, void *aux)
 	bool writable;
 
 	/* 1. TODO: If the parent_page is kernel page, then return immediately. */
-
+	if (is_kernel_vaddr(va)){
+		return true;
+	}
 	/* 2. Resolve VA from the parent's page map level 4. */
-	parent_page = pml4_get_page(parent->pml4, va);
-
+	if((parent_page = pml4_get_page(parent->pml4, va))== NULL){
+		return false;
+	}
 	/* 3. TODO: Allocate new PAL_USER page for the child and set result to
 	 *    TODO: NEWPAGE. */
-
+	if((newpage = palloc_get_page(PAL_USER|PAL_ZERO)) == NULL){
+		return false;
+	}
 	/* 4. TODO: Duplicate parent's page to the new page and
 	 *    TODO: check whether parent's page is writable or not (set WRITABLE
 	 *    TODO: according to the result). */
+	memcpy(newpage, parent_page, PGSIZE);
+	writable = is_writable(pte);
 
 	/* 5. Add new page to child's page table at address VA with WRITABLE
 	 *    permission. */
 	if (!pml4_set_page(current->pml4, va, newpage, writable))
 	{
 		/* 6. TODO: if fail to insert page, do error handling. */
+		return false;
 	}
 	return true;
 }
@@ -130,11 +156,17 @@ __do_fork(void *aux)
 	struct thread *parent = (struct thread *)aux;
 	struct thread *current = thread_current();
 	/* TODO: somehow pass the parent_if. (i.e. process_fork()'s if_) */
-	struct intr_frame *parent_if;
+
+	// add
+	struct intr_frame *parent_if = &parent->pf;
 	bool succ = true;
 
 	/* 1. Read the cpu context to local stack. */
 	memcpy(&if_, parent_if, sizeof(struct intr_frame));
+	// 자식 return value
+	if_.R.rax = 0; 
+	//
+
 
 	/* 2. Duplicate PT */
 	current->pml4 = pml4_create();
@@ -156,14 +188,34 @@ __do_fork(void *aux)
 	 * TODO:       in include/filesys/file.h. Note that parent should not return
 	 * TODO:       from the fork() until this function successfully duplicates
 	 * TODO:       the resources of parent.*/
+	// current->fd_table[0] = parent->fd_table[0];
+	// current->fd_table[1] = parent->fd_table[1];
 
+	
+	
+	for (int i = 0; i < FDCOUNT_LIMIT; i++){
+		struct file *file = parent->fd_table[i];
+		if (file == NULL){
+			continue;
+		}
+		current->fd_table[i] = file_duplicate(file);
+	}
+
+
+	current->fd_idx = parent->fd_idx;
+
+	// 포크 다했으니 세마업
+	sema_up(&current->fork_sema);
 	process_init();
 
 	/* Finally, switch to the newly created process. */
 	if (succ)
 		do_iret(&if_);
 error:
-	thread_exit();
+	current->exit_status = TID_ERROR;
+	sema_up(&current->fork_sema);
+	exit(TID_ERROR);
+	// thread_exit();
 }
 
 void argument_stack(char **argv, int argc, void **rsp)
@@ -274,9 +326,21 @@ int process_wait(tid_t child_tid UNUSED)
 	/* XXX: Hint) The pintos exit if process_wait (initd), we recommend you
 	 * XXX:       to add infinite loop here before
 	 * XXX:       implementing the process_wait. */
-	for (int i = 0; i < 100000000; i++)
-		;
-	return -1;
+	struct thread *child = get_child_process(child_tid);
+
+	if (child == NULL){
+		return -1;
+	}
+
+	sema_down(&child->wait_sema);
+
+	int child_exit_status = child->exit_status;
+	list_remove(&child->child_elem);
+
+	sema_up(&child->free_sema);
+
+	return child_exit_status;
+
 }
 
 /* Exit the process. This function is called by thread_exit (). */
@@ -296,6 +360,13 @@ void process_exit(void)
 
 	file_close(cur->running);
 
+	for(int i = 0; i <FDCOUNT_LIMIT;i++){
+		close(i);
+	}
+
+
+	sema_up(&cur->wait_sema);
+	sema_down(&cur->free_sema);
 
 	process_cleanup();
 }
@@ -420,14 +491,21 @@ load(const char *file_name, struct intr_frame *if_)
 	if (t->pml4 == NULL)
 		goto done;
 	process_activate(thread_current());
-
+	
+	// project2 deny
+	// lock_acquire(&filesys_lock);
 	/* Open executable file. */
 	file = filesys_open(file_name);
 	if (file == NULL)
 	{
+		// lock_release(&filesys_lock);
 		printf("load: %s: open failed\n", file_name);
 		goto done;
 	}
+	t->running = file;
+	file_deny_write(file);
+	// lock_release(&filesys_lock);
+
 
 	/* Read and verify executable header. */
 	if (file_read(file, &ehdr, sizeof ehdr) != sizeof ehdr || memcmp(ehdr.e_ident, "\177ELF\2\1\1", 7) || ehdr.e_type != 2 || ehdr.e_machine != 0x3E // amd64
@@ -509,8 +587,25 @@ load(const char *file_name, struct intr_frame *if_)
 
 done:
 	/* We arrive here whether the load is successful or not. */
-	file_close(file);
+	// file_close(file);
 	return success;
+}
+
+// 자식 프로세스 검색
+struct thread *get_child_process(int pid){
+	struct thread *cur = thread_current();
+	struct list *child_list = &cur->child_list;
+	struct list_elem *cur_child = list_begin(child_list);
+
+	while (cur_child != list_end(child_list)){
+		struct thread *t = list_entry(cur_child,struct thread,child_elem);
+		if (t->tid == pid){
+			return t;
+		}
+		cur_child = list_next(cur_child);
+	}
+	return NULL;
+
 }
 
 /* Checks whether PHDR describes a valid, loadable segment in

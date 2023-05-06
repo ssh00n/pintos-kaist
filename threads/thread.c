@@ -214,7 +214,8 @@ thread_create (const char *name, int priority,
 	}
 	t->fd_idx = 2;
 
-
+	// 자식 리스트에 추가
+	list_push_back(&thread_current()->child_list,&t->child_elem);
 
 
 
@@ -558,6 +559,14 @@ init_thread (struct thread *t, const char *name, int priority) {
 
 	// project 2
 	t->exit_status = 0;
+	
+	list_init(&t->child_list);
+	sema_init(&t->fork_sema,0);
+	sema_init(&t->wait_sema,0);
+	sema_init(&t->free_sema,0);
+
+
+	t->running = NULL;
 }
 
 /* Chooses and returns the next thread to be scheduled.  Should

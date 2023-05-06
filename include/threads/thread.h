@@ -107,13 +107,20 @@ struct thread {
 	/* Shared between thread.c and synch.c. */
 	struct list_elem elem;              /* List element. */
 
+	// project 2
 	int exit_status;
+
 	struct file **fd_table; 
 	int fd_idx;
+	
 	struct file *running;
+
 	struct semaphore wait_sema;
 	struct semaphore free_sema;
 	struct semaphore fork_sema;
+
+	struct list child_list;
+	struct list_elem child_elem;
 #ifdef USERPROG
 	/* Owned by userprog/process.c. */
 	uint64_t *pml4;                     /* Page map level 4 */

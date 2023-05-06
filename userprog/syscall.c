@@ -12,12 +12,15 @@
 #include "filesys/filesys.h"
 #include "filesys/file.h"
 #include <devices/input.h>
+#include "threads/palloc.h"
+
 
 void syscall_entry(void);
 void syscall_handler(struct intr_frame *);
 void halt(void);
 void exit(int status);
 tid_t fork(const char *thread_name, struct intr_frame *f);
+tid_t exec(const char *cmd_line);
 void close(int fd);
 bool create(const char *file, unsigned initial_size);
 bool remove(const char *file);
@@ -27,8 +30,8 @@ int read(int fd, void *buffer, unsigned size);
 int write(int fd, void *buffer, unsigned size);
 void seek(int fd, unsigned position);
 unsigned tell(int fd);
-
 void close(int fd);
+
 static struct file *find_file_by_fd(int fd);
 int add_file_to_fdt(struct file *file);
 void remove_file(int fd);
@@ -74,9 +77,10 @@ void syscall_handler(struct intr_frame *f UNUSED)
 		exit(f->R.rdi);
 		break;
 	case SYS_FORK:
-		// f->R.rax = fork(f->R.rdi,f);
+		f->R.rax = fork(f->R.rdi,f);
 		break;
 	case SYS_EXEC:
+		f->R.rax = exec(f->R.rdi);
 		break;
 	case SYS_WAIT:
 		f->R.rax = process_wait(f->R.rdi);
@@ -103,7 +107,7 @@ void syscall_handler(struct intr_frame *f UNUSED)
 		seek(f->R.rdi, f->R.rsi);
 		break;
 	case SYS_TELL:
-		tell(f->R.rdi);
+		f->R.rax = tell(f->R.rdi);
 		break;
 	case SYS_CLOSE:
 		close(f->R.rdi);
@@ -156,6 +160,24 @@ void exit(int status)
 tid_t fork(const char *thread_name, struct intr_frame *f)
 {
 	return process_fork(thread_name, f);
+}
+
+tid_t exec(const char *cmd_line){
+	check_address(cmd_line);
+	// file name이 cleanup으로 날아가니까 복사
+	int size = strlen(cmd_line)+1; // null 까지
+	char *fn_copy = palloc_get_page(PAL_ZERO);
+	if (fn_copy == NULL){
+		exit(-1);
+	}
+	strlcpy(fn_copy, cmd_line,size);
+
+	if(process_exec(fn_copy) == -1 ){
+		return -1;
+	}
+
+	NOT_REACHED();
+
 }
 
 bool create(const char *file, unsigned initial_size)
