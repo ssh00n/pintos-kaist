@@ -190,7 +190,9 @@ __do_fork(void *aux)
 	 * TODO:       the resources of parent.*/
 	// current->fd_table[0] = parent->fd_table[0];
 	// current->fd_table[1] = parent->fd_table[1];
-
+	// multi-oom
+	if (parent->fd_idx == FDCOUNT_LIMIT)
+		goto error;
 	
 	
 	for (int i = 0; i < FDCOUNT_LIMIT; i++){
@@ -352,9 +354,7 @@ void process_exit(void)
 	 * TODO: project2/process_termination.html).
 	 * TODO: We recommend you to implement process resource cleanup here. */
 
-	for (int i = 0;i<FDCOUNT_LIMIT;i++){
-		close(i);
-	}
+
 
 	palloc_free_multiple(cur->fd_table, FDT_PAGES);
 
