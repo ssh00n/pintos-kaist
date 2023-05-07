@@ -133,7 +133,7 @@ thread_init (void) {
 /* Starts preemptive thread scheduling by enabling interrupts.
    Also creates the idle thread. */
 void
-thread_start (void) {
+thread_start (void) { 
 	/* Create the idle thread. */
 	struct semaphore idle_started;
 	sema_init (&idle_started, 0);
@@ -209,9 +209,10 @@ thread_create (const char *name, int priority,
 		return TID_ERROR;
 	}
 	t->next_fd = 2;
-	
-	tid = t->tid = allocate_tid ();
 
+	tid = t->tid = allocate_tid ();
+	
+	
 	// in Pintos, context of thread is saved in struct tf
 
 	/* Call the kernel_thread if it scheduled.
@@ -224,7 +225,8 @@ thread_create (const char *name, int priority,
 	t->tf.ss = SEL_KDSEG;
 	t->tf.cs = SEL_KCSEG;
 	t->tf.eflags = FLAG_IF;
-
+	
+	list_push_back(&thread_current()->children, &t->child_elem);
 	/* Add to run queue. */
 	thread_unblock (t);
 	if (thread_current()->priority < t->priority)
@@ -306,6 +308,8 @@ thread_tid (void) {
 void
 thread_exit (void) {
 	ASSERT (!intr_context ());
+
+	sema_up(&thread_current()->exit_sema);
 
 #ifdef USERPROG
 	process_exit ();
@@ -545,7 +549,14 @@ init_thread (struct thread *t, const char *name, int priority) {
 	strlcpy (t->name, name, sizeof t->name);
 	t->tf.rsp = (uint64_t) t + PGSIZE - sizeof (void *);
 	
+	list_init (&t->children);
 	list_init (&t->donations);
+	list_init (&t->running_files);
+
+	sema_init (&t->fork_sema, 0);
+	sema_init (&t->wait_sema, 0);
+	sema_init (&t->exit_sema, 0);
+
 	t->wait_on_lock = NULL;
 	t->priority = priority;
 	t->original_priority = priority;

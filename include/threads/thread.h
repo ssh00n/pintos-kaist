@@ -5,6 +5,8 @@
 #include <list.h>
 #include <stdint.h>
 #include "threads/interrupt.h"
+#include "threads/synch.h"
+
 #ifdef VM
 #include "vm/vm.h"
 #endif
@@ -106,6 +108,7 @@ struct thread {
 	/* Shared between thread.c and synch.c. */
 	struct list_elem elem;              /* List element. */
 
+
 #ifdef USERPROG
 	/* Owned by userprog/process.c. */
 	uint64_t *pml4;                     /* Page map level 4 */
@@ -115,11 +118,21 @@ struct thread {
 	/* Table for whole virtual memory owned by thread. */
 	struct supplemental_page_table spt;
 #endif
+	struct semaphore fork_sema;
+	struct semaphore wait_sema;
+	struct semaphore exit_sema;
+	
+	// struct file* running_file;
+	// struct list running_files;
+	// struct list_elem file_elem;
+	
+	struct list children;
+	struct list_elem child_elem;
 
     struct file **fdt; /* Array of pointers to struct file */
 	int next_fd;		/* Next available file descriptor */
 
-	short exit_code;
+	short exit_status;
 	// struct semaphore fork_sema;
 	struct intr_frame pf;					// parent interrupt frame
 	/* Owned by thread.c. */

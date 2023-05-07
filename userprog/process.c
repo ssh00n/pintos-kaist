@@ -30,6 +30,7 @@ static void initd (void *f_name);
 static void __do_fork (void *);
 
 void push_args(char **argv, int argc, struct intr_frame *if_);
+struct thread* get_child_process(child_tid);
 
 /* General process initializer for initd and other process. */
 static void
@@ -58,6 +59,7 @@ process_create_initd (const char *file_name) {
 	char *save_ptr = file_name;
 	/* Create a new thread to execute FILE_NAME. */
 	tid = thread_create (strtok_r(save_ptr, " ", &save_ptr), PRI_DEFAULT, initd, fn_copy);
+	
 	if (tid == TID_ERROR)
 		palloc_free_page (fn_copy);
 	return tid;
@@ -82,11 +84,15 @@ initd (void *f_name) {
 tid_t
 process_fork (const char *name, struct intr_frame *if_ UNUSED) {
 	/* Clone current thread to new thread.*/
-	struct thread* cur = thread_current();
-	memcpy(&cur->pf, if_, sizeof(struct intr_frame));
+	struct thread* parent = thread_current();
+	memcpy(&parent->pf, if_, sizeof(struct intr_frame));
 	
-	return thread_create (name,
-			PRI_DEFAULT, __do_fork, cur);
+	tid_t tid;
+	tid = thread_create (name, PRI_DEFAULT, __do_fork, parent);
+	struct thread* child = get_child_process(tid);
+	sema_down(&child->fork_sema);
+	
+	return tid;
 }
 
 #ifndef VM
@@ -102,19 +108,33 @@ duplicate_pte (uint64_t *pte, void *va, void *aux) {
 
 	/* 1. TODO: If the parent_page is kernel page, then return immediately. */
 
+	if (is_kernel_vaddr(va)){
+		return true;
+	}
 	/* 2. Resolve VA from the parent's page map level 4. */
 	parent_page = pml4_get_page (parent->pml4, va);
 
+	if (parent_page == NULL || is_kernel_vaddr(va)) {
+		return false;
+	}
 	/* 3. TODO: Allocate new PAL_USER page for the child and set result to
 	 *    TODO: NEWPAGE. */
-
+	newpage = palloc_get_page(PAL_USER | PAL_ZERO);
+	if (newpage == NULL){
+		palloc_free_page(newpage);
+		return false;
+	}
 	/* 4. TODO: Duplicate parent's page to the new page and
 	 *    TODO: check whether parent's page is writable or not (set WRITABLE
 	 *    TODO: according to the result). */
-
+	writable = is_writable(pte);
+	memcpy(newpage, parent_page, PGSIZE);
+	
 	/* 5. Add new page to child's page table at address VA with WRITABLE
 	 *    permission. */
 	if (!pml4_set_page (current->pml4, va, newpage, writable)) {
+		palloc_free_page(newpage);
+		return false;
 		/* 6. TODO: if fail to insert page, do error handling. */
 	}
 	return true;
@@ -137,6 +157,8 @@ __do_fork (void *aux) {
 	/* 1. Read the cpu context to local stack. */
 	memcpy (&if_, parent_if, sizeof (struct intr_frame));
 
+	if_.R.rax = 0;
+
 	/* 2. Duplicate PT */
 	current->pml4 = pml4_create();
 	if (current->pml4 == NULL)
@@ -151,20 +173,29 @@ __do_fork (void *aux) {
 	if (!pml4_for_each (parent->pml4, duplicate_pte, parent))
 		goto error;
 #endif
-	
 	/* TODO: Your code goes here.
 	 * TODO: Hint) To duplicate the file object, use `file_duplicate`
 	 * TODO:       in include/filesys/file.h. Note that parent should not return
 	 * TODO:       from the fork() until this function successfully duplicates
 	 * TODO:       the resources of parent.*/
 
+	for(int i=0; i<FDCOUNT_LIMIT; i++){
+		if (parent->fdt[i] != NULL){
+			current->fdt[i] = file_duplicate(parent->fdt[i]);
+		}
+	}
+	current->next_fd = parent->next_fd;
 	process_init ();
 
 	/* Finally, switch to the newly created process. */
-	if (succ)
+	
+	if (succ){
+		sema_up(&current->fork_sema);
 		do_iret (&if_);
+	}
 error:
 	thread_exit ();
+	
 }
 
 
@@ -172,8 +203,9 @@ error:
  * Returns -1 on fail. */
 int
 process_exec (void *f_name) {		
-								
-	char *file_name = f_name;
+	// char *file_name = f_name;
+	char *file_name = palloc_get_page (PAL_USER); // allocate pages from kernel memory pool
+	strlcpy(file_name, f_name, PGSIZE);
 	bool success;
 
 	/* We cannot use the intr_frame in the thread structure.
@@ -185,14 +217,13 @@ process_exec (void *f_name) {
 	_if.eflags = FLAG_IF | FLAG_MBS;
 
 	/* We first kill the current context */
-	process_cleanup ();
+	process_cleanup ();	
 
 	char *token, *saveptr;
 	char *argv[128];
 	int argc = 0;
 
 	// Parse command into executable file, options, and other arguments
-	
 	token = strtok_r(file_name, " ", &saveptr);
 	while (token != NULL) {
 		argv[argc++] = token;
@@ -202,16 +233,17 @@ process_exec (void *f_name) {
 	/* And then load the binary */
 	success = load (argv[0], &_if);
 
-	push_args(argv, argc, &_if);	
-
-	size_t byte_size = USER_STACK-(uint64_t)_if.rsp;
+	// size_t byte_size = USER_STACK-(uint64_t)_if.rsp;
 	// hex_dump(_if.rsp, _if.rsp, byte_size, true);
 
 	/* If load failed, quit. */
-	palloc_free_page (file_name);
-	if (!success)
-		return -1;
+	
 
+	if (!success){
+		palloc_free_page (file_name);
+		return -1;
+	}
+	push_args(argv, argc, &_if);
 	/* Start switched process. */
 	do_iret (&_if);
 	NOT_REACHED ();
@@ -251,6 +283,18 @@ void push_args(char **argv, int argc, struct intr_frame *if_){
 
 }
 
+struct thread* get_child_process(child_tid){
+	struct thread *cur = thread_current();
+	struct thread *t = NULL;
+	struct list_elem *e;
+	for (e = list_begin(&cur->children); e != list_end(&cur->children); e = list_next(e)){
+		t = list_entry(e, struct thread, child_elem);
+		if(t->tid == child_tid) {
+			return t;
+		}
+	}
+	return NULL;
+}
 
 
 /* Waits for thread TID to die and returns its exit status.  If
@@ -269,21 +313,64 @@ process_wait (tid_t child_tid UNUSED) {
 	// In wait(tid), call sema_down for the semaphore of tid.
 	// In exit() of process tid, call sema_up
 	// Where do we need to place sema_down and sema_up?
+
+	struct thread *child = get_child_process(child_tid);
+
+	if (child == NULL) return -1;
+
+	sema_down(&child->exit_sema);
+	list_remove(&child->child_elem);
+
+	return child->exit_status;
 	
-	for (int i =0; i<100000000; i++){
-		;
-	}
+	// sema_down(&cur->wait_sema); // caller blocks until the child process exits
+	
+	// int status = child->exit_status;
+	// list_remove(&child->child_elem);
+	// palloc_free_page(child);
+	// // once child process exits, deallocate the descriptor of child process
+	// // and returns exit status of the child process
+
+	// return status;
+	// return -1;
 	/* XXX: Hint) The pintos exit if process_wait (initd), we recommend you
 	 * XXX:       to add infinite loop here before
 	 * XXX:       implementing the process_wait. */
-	return -1;
+	
 }
 
 /* Exit the process. This function is called by thread_exit (). */
 void
 process_exit (void) {
-	struct thread *curr = thread_current ();
+	struct thread *cur = thread_current ();
 
+	// Clear fd list
+	struct file **fdt = cur->fdt;
+	for (int i = 2; i < FDCOUNT_LIMIT; i++){
+		if (fdt[i] != NULL){
+			file_close(fdt[i]);
+			fdt[i] = NULL;
+		}
+	}
+	
+	// struct list_elem *e;
+	// struct thread *t;
+
+	// for (e = list_begin(&cur->running_files), e != list_end(&cur->running_files), e = list_next(e)){
+	// 	struct file *f = list_entry (e, struct thread, file_elem);
+	// 	file_close(f);
+
+	// }
+
+	// list_remove(&cur->file_elem);
+
+	palloc_free_page(cur->fdt);
+	thread_current()->fdt = NULL;
+	
+	// list_remove(&cur->child_elem); // clear child_list
+	// palloc_free_page(cur);
+
+	// remove_child_process();
 	// deallocate_fdt(curr);
 	// 1. clear children list -> todo when implementing fork(), exec(), wait()
 	// 2. clear fd list (close all files)
@@ -294,8 +381,11 @@ process_exit (void) {
 	 * TODO: Implement process termination message (see
 	 * TODO: project2/process_termination.html).
 	 * TODO: We recommend you to implement process resource cleanup here. */
-	
+	// printf("%s: exit(%d)\n", thread_name(), cur->exit_status);
+
 	process_cleanup ();
+	// if (parent != NULL)
+	// 	sema_up(&parent->wait_sema);
 }
 
 /* Free the current process's resources. */
@@ -420,8 +510,6 @@ load (const char *file_name, struct intr_frame *if_) {
 		printf ("load: %s: open failed\n", file_name);
 		goto done;
 	}
-	/* Do not allow the file to be modified when it is opend for execution */
-	// file_deny_write(file);
 	
 	/* Read and verify executable header. */
 	if (file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr
@@ -434,6 +522,10 @@ load (const char *file_name, struct intr_frame *if_) {
 		printf ("load: %s: error loading executable\n", file_name);
 		goto done;
 	}
+	
+	/* Do not allow the file to be modified when it is opend for execution */
+	// list_push_back(&t->running_files, &t->file_elem);
+	// file_deny_write(file);
 
 	/* Read program headers. */
 	file_ofs = ehdr.e_phoff;

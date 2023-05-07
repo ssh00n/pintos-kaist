@@ -12,10 +12,18 @@
 
 #include "filesys/file.h"
 #include "filesys/filesys.h"
+// #include "user/syscall.h"
+
+typedef int pid_t;
+#define PID_ERROR ((pid_t) -1)
+
 void syscall_entry (void);
 void syscall_handler (struct intr_frame *);
 
 void halt();
+pid_t fork(struct intr_frame *f);
+
+int wait(pid_t pid);
 int open(const char *file);
 void close(int fd);
 bool create(const char *file, unsigned initial_size);
@@ -71,20 +79,7 @@ syscall_init (void) {
 /* The main system call interface */
 void
 syscall_handler (struct intr_frame *f UNUSED) {
-	// /*
-	// 	Arguments:
-	//  %rdi
-	// 	%rsi
-	// 	%rdx
-	// 	%r10
-	// 	%r8
-	// 	%r9
-	// */
-	// // 1. 스택 포인터가 유저 영역인지 확인
-	// // 2. 스택에서 시스템 콜 넘버 복사
-	//  // 스택 포인터가 유저 영역에 있는가?
-	// // 3. 시스템 콜 넘버에 따른 인자 복사 및 시스템 콜 호출
-
+	// /* Arguments: %rdi %rsi %rdx %r10 %r8 %r9 */
 	// // TODO: Your implementation goes here.
 	switch(f->R.rax){
 		case SYS_HALT:
@@ -96,20 +91,23 @@ syscall_handler (struct intr_frame *f UNUSED) {
 			int status = f->R.rdi;
 			exit(status);
 		}
-	// 	// case SYS_FORK:
-	// 	// {
-	// 	// 	fork(f);
-	// 	// 	// fork 구현하기
-
-	// 	// }
-	// 	// case SYS_EXEC:
-	// 	// {
-	// 	// 	int result = exec(f->R.rdi);
-	// 	// }
-	// 	// case SYS_WAIT:
-	// 	// {
-	// 	// 	wait(pid_t pid);
-	// 	// }
+		case SYS_FORK:
+		{
+			f->R.rax = fork(f);
+			break;
+		 }
+		case SYS_EXEC:
+		{
+			const char *file = f->R.rdi;
+			f->R.rax = exec(file);
+			break;
+		}
+		case SYS_WAIT:
+		{
+			pid_t pid = f->R.rdi;
+			f->R.rax = wait(pid);
+			break;
+		}
 		case SYS_CREATE:
 		{
 			const char *file = f->R.rdi;
@@ -196,8 +194,9 @@ syscall_handler (struct intr_frame *f UNUSED) {
 	// thread_exit ();
 }
 
-int add_file(struct file *file)
-{
+
+
+int add_file(struct file *file) {
 	struct thread *cur = thread_current();
 	struct file **fdt = cur->fdt;
 
@@ -213,17 +212,15 @@ int add_file(struct file *file)
 	return cur->next_fd;
 }
 
-void remove_file(int fd)
-{
+void remove_file(int fd) {
 	struct thread *cur = thread_current();
-
 	if (fd < 0 || fd >= FDCOUNT_LIMIT)
 		return;
 
 	cur->fdt[fd] = NULL;
 }
 
-void validate_address(void *addr){
+void validate_address(void *addr) {
 	struct thread *t = thread_current();
 	
 	if (is_kernel_vaddr(addr) || (pml4_get_page (t->pml4, addr) == NULL)){
@@ -236,32 +233,43 @@ void halt(){
 	power_off();
 }
 
-// int wait(pid_t pid){
-// 	// Wait for a child process pid to exit and retrieve the child's exit status
 
-// }
-
-void exit(int status){
-	thread_current()->exit_code = status;
+void exit(int status) {
+	thread_current()->exit_status = status;
 	printf("%s: exit(%d)\n", thread_name(), status);
 	thread_exit();
 }
 
-// pid_t fork(struct intr_frame *f){
-// 	char *thread_name = f->R.rdi;
-// 	int return_value;
-// 	return_value = process_fork(thread_name, f);
-// 	f->R.rax = return_value;
-// }
+int wait (pid_t pid) {
 
-// int exec(const char* file) { // file name
+	// find the thread corresponding to the child process ID and wait for it
 
-// }
+	return process_wait(pid);
+
+	// to exit using the semaphore as described in step 2
+	// When the child thread exits, release the semaphore using sema_up()
+	// Return the child process ID from the wait() system call.
+}
+
+
+pid_t fork(struct intr_frame *f) {
+	const char *thread_name= f->R.rdi;
+	tid_t tid;
+	tid = process_fork(thread_name, f);
+	
+	return tid;
+	
+}
+
+int exec(const char* file) {
+	validate_address(file);
+	return process_exec(file);
+
+}
 
 
 /* Get file pointer for given file descriptor */
-struct file *get_file(int fd)
-{
+struct file *get_file(int fd) {
 	struct file **fdt = thread_current()->fdt;
 	if (fd < 0 || fd >= FDCOUNT_LIMIT)
 	{
@@ -280,7 +288,7 @@ bool create(const char *file, unsigned initial_size) {
 }
 
 
-bool remove(const char *file){
+bool remove(const char *file) {
 	bool success;
 	validate_address(file);
 	if(file == NULL) {
@@ -292,7 +300,7 @@ bool remove(const char *file){
 
 
 /* open file corresponds to path in "file" */
-int open(const char *file){ 
+int open(const char *file) { 
 	validate_address(file);
 	/* Acquire global lock */
 	lock_acquire(&filesys_lock);
@@ -337,62 +345,72 @@ void close(int fd) {
 	return 0;
 }
 
-int read(int fd, void *buffer, unsigned size){
+int read(int fd, void *buffer, unsigned size) {
 	// Read size bytes from the file open as fd into buffer.
 	// Return the number of bytes actually read (0 at end of file), or -1 if fails
-	//if fd is 0, it reads from keyboard using input_getc(), 
+	// if fd is 0, it reads from keyboard using input_getc(), 
 	// otherwise reads from file using file_read() function
+
 	validate_address(buffer);
-
-	struct file *file_ptr = get_file(fd);
 	lock_acquire(&filesys_lock);
+	off_t read_size = 0;
+	char *read_buffer = (char *)buffer;
 
-	if (file_ptr == NULL){
-		lock_release(&filesys_lock);
-		return -1;
-	}
 	/* STDIN */
 	if (fd == 0) {
-		char *buf = (char *) buffer;
-		for (unsigned i=0; i<size; i ++){
-			buf[i] = input_getc();
+		while (read_size < size) {
+			read_buffer[read_size] = input_getc();
+			if (read_buffer[read_size] == '\n'){
+				break;
+			}
+			read_size++;
 		}
+		read_buffer[read_size]='\0';
 		lock_release(&filesys_lock);
-		return size;
+		return read_size;
 	}
+
 	else{
-		off_t read_size;
-		read_size = file_read(file_ptr, buffer, size);
+		struct file *file_ptr = get_file(fd);
+		if (file_ptr == NULL){
+			lock_release(&filesys_lock);
+			return -1;
+		}
+		read_size = file_read(file_ptr, read_buffer, size);
 		lock_release(&filesys_lock);
 		return read_size;
 	}
 }
 
-int write(int fd, const void *buffer, unsigned size){
+int write(int fd, const void *buffer, unsigned size) {
 	// Write size bytes from buffer to the open file fd.
 	// Returns the number of bytes actually written.
 	// If fd is 1, it write to the console using putbuf(), 
 	// otherwise write to the file using file_write() function
 	validate_address(buffer);
 	lock_acquire(&filesys_lock);
+	off_t written_size = 0;
+	char *write_buffer = (char *)buffer;
+
 	/* STDOUT */
 	if (fd == 1) {
-		char *buf = (char *)buffer;
-		putbuf(buf, size);
+		putbuf(write_buffer, size);
 		lock_release(&filesys_lock);
 		return size;
 	}
-	
 	else {
 		struct file *file_ptr = get_file(fd);
-		off_t written_size;
-		written_size = file_write(file_ptr, buffer, size);
+		if (file_ptr == NULL){
+			lock_release(&filesys_lock);
+			return -1;
+		}
+		written_size = file_write(file_ptr, write_buffer, size);
 		lock_release(&filesys_lock);
 		return written_size;
 	}
 }
 
-int filesize(int fd){
+int filesize(int fd) {
 	if (fd < 2 || fd > FDCOUNT_LIMIT){
 		return -1;
 	}
@@ -404,24 +422,23 @@ int filesize(int fd){
 }
 
 /* Changes the next byte to be read or written in open file fd to position */
-void seek(int fd, unsigned position){
+void seek(int fd, unsigned position) {
 	if (fd < 2 || fd > FDCOUNT_LIMIT){
 		return;
 	}
 	struct file *file_ptr = get_file(fd);
-	validate_address(file_ptr);
+	
 	if (file_ptr == NULL){
 		return;
 	}
 	file_seek(file_ptr, position);
 }
 
-unsigned tell(int fd){
+unsigned tell(int fd) {
 	if (fd < 2 || fd > FDCOUNT_LIMIT){
 		return;
 	}
 	struct file *file_ptr = get_file(fd);
-	validate_address(file_ptr);
 
 	return file_tell(file_ptr);
 }
