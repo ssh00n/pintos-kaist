@@ -177,7 +177,6 @@ tid_t exec(const char *cmd_line){
 	}
 
 	NOT_REACHED();
-
 }
 
 bool create(const char *file, unsigned initial_size)
@@ -248,10 +247,12 @@ int read(int fd, void *buffer, unsigned size)
 int write(int fd, void *buffer, unsigned size)
 {
 	check_address(buffer);
+	// stdin
 	if (fd == 0)
 	{
 		return -1;
 	}
+	// stdout
 	if (fd == 1)
 	{
 		lock_acquire(&filesys_lock);

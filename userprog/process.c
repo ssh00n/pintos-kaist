@@ -355,9 +355,9 @@ void process_exit(void)
 	 * TODO: We recommend you to implement process resource cleanup here. */
 
 
-
+	
 	palloc_free_multiple(cur->fd_table, FDT_PAGES);
-
+	//rox
 	file_close(cur->running);
 
 	for(int i = 0; i <FDCOUNT_LIMIT;i++){
