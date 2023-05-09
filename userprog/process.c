@@ -31,7 +31,7 @@ static void __do_fork (void *);
 
 void push_args(char **argv, int argc, struct intr_frame *if_);
 struct thread* get_child_process(child_tid);
-
+void clear_children();
 /* General process initializer for initd and other process. */
 static void
 process_init (void) {
@@ -89,9 +89,16 @@ process_fork (const char *name, struct intr_frame *if_ UNUSED) {
 	
 	tid_t tid;
 	tid = thread_create (name, PRI_DEFAULT, __do_fork, parent);
-	struct thread* child = get_child_process(tid);
-	sema_down(&child->fork_sema);
+	if (tid < 0){
+		return TID_ERROR;
+	}
 	
+	struct thread* child = get_child_process(tid);
+	if (child == NULL){
+		return TID_ERROR;
+	}
+	sema_down(&child->fork_sema);
+
 	return tid;
 }
 
@@ -114,7 +121,7 @@ duplicate_pte (uint64_t *pte, void *va, void *aux) {
 	/* 2. Resolve VA from the parent's page map level 4. */
 	parent_page = pml4_get_page (parent->pml4, va);
 
-	if (parent_page == NULL || is_kernel_vaddr(va)) {
+	if (parent_page == NULL) {
 		return false;
 	}
 	/* 3. TODO: Allocate new PAL_USER page for the child and set result to
@@ -179,12 +186,17 @@ __do_fork (void *aux) {
 	 * TODO:       from the fork() until this function successfully duplicates
 	 * TODO:       the resources of parent.*/
 
-	for(int i=0; i<FDCOUNT_LIMIT; i++){
+	if(parent->next_fd == FDCOUNT_LIMIT)
+		goto error;
+
+	for(int i=0; i < FDCOUNT_LIMIT; i++){
 		if (parent->fdt[i] != NULL){
 			current->fdt[i] = file_duplicate(parent->fdt[i]);
 		}
 	}
+
 	current->next_fd = parent->next_fd;
+	// current->running_file = file_duplicate(parent->running_file);
 	process_init ();
 
 	/* Finally, switch to the newly created process. */
@@ -194,8 +206,9 @@ __do_fork (void *aux) {
 		do_iret (&if_);
 	}
 error:
-	thread_exit ();
-	
+	sema_up(&current->fork_sema);
+	current->exit_status = TID_ERROR;
+	exit(TID_ERROR);
 }
 
 
@@ -296,6 +309,23 @@ struct thread* get_child_process(child_tid){
 	return NULL;
 }
 
+void clear_children(){
+	struct thread *cur = thread_current();
+	struct thread *t;
+	struct list_elem *e;
+
+	if (!list_empty(&cur->children)){
+		e = list_begin(&cur->children);
+	for(; e = list_end(&cur->children); e = list_next(e)){
+		t = list_entry(e, struct thread, child_elem);
+		if (t != NULL){
+			list_remove(e);
+			palloc_free_page(t);
+			}
+		}
+	}
+}
+
 
 /* Waits for thread TID to die and returns its exit status.  If
  * it was terminated by the kernel (i.e. killed due to an
@@ -314,25 +344,17 @@ process_wait (tid_t child_tid UNUSED) {
 	// In exit() of process tid, call sema_up
 	// Where do we need to place sema_down and sema_up?
 
+
 	struct thread *child = get_child_process(child_tid);
 
 	if (child == NULL) return -1;
 
 	sema_down(&child->exit_sema);
 	list_remove(&child->child_elem);
+	sema_up(&child->free_sema);
 
 	return child->exit_status;
 	
-	// sema_down(&cur->wait_sema); // caller blocks until the child process exits
-	
-	// int status = child->exit_status;
-	// list_remove(&child->child_elem);
-	// palloc_free_page(child);
-	// // once child process exits, deallocate the descriptor of child process
-	// // and returns exit status of the child process
-
-	// return status;
-	// return -1;
 	/* XXX: Hint) The pintos exit if process_wait (initd), we recommend you
 	 * XXX:       to add infinite loop here before
 	 * XXX:       implementing the process_wait. */
@@ -343,7 +365,7 @@ process_wait (tid_t child_tid UNUSED) {
 void
 process_exit (void) {
 	struct thread *cur = thread_current ();
-
+	
 	// Clear fd list
 	struct file **fdt = cur->fdt;
 	for (int i = 2; i < FDCOUNT_LIMIT; i++){
@@ -352,26 +374,23 @@ process_exit (void) {
 			fdt[i] = NULL;
 		}
 	}
-	
-	// struct list_elem *e;
-	// struct thread *t;
 
-	// for (e = list_begin(&cur->running_files), e != list_end(&cur->running_files), e = list_next(e)){
-	// 	struct file *f = list_entry (e, struct thread, file_elem);
-	// 	file_close(f);
+	// clear_children();
+		
+	if (cur->running_file != NULL){
+		file_close(cur->running_file);
+		cur->running_file = NULL;
+	}
 
-	// }
+	palloc_free_multiple(cur->fdt, FDT_PAGES);
+	cur->fdt = NULL;
 
-	// list_remove(&cur->file_elem);
+	sema_up(&cur->exit_sema);
+	sema_down(&cur->free_sema);
+		
+	process_cleanup ();
 
-	palloc_free_page(cur->fdt);
-	thread_current()->fdt = NULL;
-	
-	// list_remove(&cur->child_elem); // clear child_list
-	// palloc_free_page(cur);
 
-	// remove_child_process();
-	// deallocate_fdt(curr);
 	// 1. clear children list -> todo when implementing fork(), exec(), wait()
 	// 2. clear fd list (close all files)
 	// 3. deallocate the file descriptor table
@@ -383,9 +402,7 @@ process_exit (void) {
 	 * TODO: We recommend you to implement process resource cleanup here. */
 	// printf("%s: exit(%d)\n", thread_name(), cur->exit_status);
 
-	process_cleanup ();
-	// if (parent != NULL)
-	// 	sema_up(&parent->wait_sema);
+	// Destroy the current process's page directory and switch back to the kernel-only page dir
 }
 
 /* Free the current process's resources. */
@@ -522,10 +539,10 @@ load (const char *file_name, struct intr_frame *if_) {
 		printf ("load: %s: error loading executable\n", file_name);
 		goto done;
 	}
-	
+
 	/* Do not allow the file to be modified when it is opend for execution */
-	// list_push_back(&t->running_files, &t->file_elem);
-	// file_deny_write(file);
+	file_deny_write(file);
+	t->running_file = file;
 
 	/* Read program headers. */
 	file_ofs = ehdr.e_phoff;
@@ -594,7 +611,7 @@ load (const char *file_name, struct intr_frame *if_) {
 
 done:
 	/* We arrive here whether the load is successful or not. */
-	file_close (file);
+	
 	return success;
 }
 

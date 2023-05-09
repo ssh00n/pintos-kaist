@@ -30,8 +30,8 @@ typedef int tid_t;
 #define PRI_DEFAULT 31                  /* Default priority. */
 #define PRI_MAX 63                      /* Highest priority. */
 
-#define FDT_PAGES 3 // pages allocate for file descriptor tables (thread_create,process_exit)
-#define FDCOUNT_LIMIT FDT_PAGES *(1 << 9) // fd_idx limit
+#define FDT_PAGES 14 // pages allocate for file descriptor tables (thread_create,process_exit)
+#define FDCOUNT_LIMIT FDT_PAGES * (1 << 9) // fd_idx limit
 
 /* A kernel thread or user process.
  *
@@ -119,12 +119,10 @@ struct thread {
 	struct supplemental_page_table spt;
 #endif
 	struct semaphore fork_sema;
-	struct semaphore wait_sema;
 	struct semaphore exit_sema;
-	
-	// struct file* running_file;
-	// struct list running_files;
-	// struct list_elem file_elem;
+	struct semaphore free_sema;
+
+	struct file* running_file;
 	
 	struct list children;
 	struct list_elem child_elem;

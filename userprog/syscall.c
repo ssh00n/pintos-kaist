@@ -85,11 +85,13 @@ syscall_handler (struct intr_frame *f UNUSED) {
 		case SYS_HALT:
 		{
 			halt();
+	
 		}
 		case SYS_EXIT:
 		{
 			int status = f->R.rdi;
 			exit(status);
+			
 		}
 		case SYS_FORK:
 		{
@@ -199,6 +201,7 @@ syscall_handler (struct intr_frame *f UNUSED) {
 int add_file(struct file *file) {
 	struct thread *cur = thread_current();
 	struct file **fdt = cur->fdt;
+
 
 	while ((cur->next_fd < FDCOUNT_LIMIT) && fdt[cur->next_fd])
 	{
@@ -319,6 +322,10 @@ int open(const char *file) {
 
 	/* Add file to file descriptor table */
 	int fd = add_file(file_ptr);
+	
+	if (fd == -1){
+		file_close(file_ptr);
+	}
 	
 	/* Release global lock */
 	lock_release(&filesys_lock);

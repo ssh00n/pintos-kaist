@@ -309,7 +309,6 @@ void
 thread_exit (void) {
 	ASSERT (!intr_context ());
 
-	sema_up(&thread_current()->exit_sema);
 
 #ifdef USERPROG
 	process_exit ();
@@ -551,15 +550,17 @@ init_thread (struct thread *t, const char *name, int priority) {
 	
 	list_init (&t->children);
 	list_init (&t->donations);
-	list_init (&t->running_files);
 
 	sema_init (&t->fork_sema, 0);
-	sema_init (&t->wait_sema, 0);
+	sema_init (&t->free_sema, 0);
 	sema_init (&t->exit_sema, 0);
 
+	t->exit_status = 0;
+	t->running_file = NULL;
 	t->wait_on_lock = NULL;
 	t->priority = priority;
 	t->original_priority = priority;
+	
 	
 	t->magic = THREAD_MAGIC;
 }
@@ -716,7 +717,7 @@ schedule (void) {
 		/* If the thread we switched from is dying, destroy its struct
 		   thread. This must happen late so that thread_exit() doesn't
 		   pull out the rug under itself.
-		   We just queuing the page free reqeust here because the page is
+		   We just queuing the page free request here because the page is
 		   currently used by the stack.
 		   The real destruction logic will be called at the beginning of the
 		   schedule(). */
