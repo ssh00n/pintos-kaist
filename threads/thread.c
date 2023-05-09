@@ -205,6 +205,7 @@ thread_create (const char *name, int priority,
 	/* Initialize thread. */
 	init_thread (t, name, priority);
 	t->fdt = palloc_get_multiple(PAL_ZERO, FDT_PAGES);
+	
 	if (t->fdt == NULL){
 		return TID_ERROR;
 	}

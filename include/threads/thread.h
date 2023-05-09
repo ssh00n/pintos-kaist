@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include "threads/interrupt.h"
 #include "threads/synch.h"
+#include "threads/vaddr.h"
 
 #ifdef VM
 #include "vm/vm.h"
@@ -30,8 +31,8 @@ typedef int tid_t;
 #define PRI_DEFAULT 31                  /* Default priority. */
 #define PRI_MAX 63                      /* Highest priority. */
 
-#define FDT_PAGES 14 // pages allocate for file descriptor tables (thread_create,process_exit)
-#define FDCOUNT_LIMIT FDT_PAGES * (1 << 9) // fd_idx limit
+#define FDT_PAGES 14  // pages allocate for file descriptor tables 
+#define FDCOUNT_LIMIT FDT_PAGES * (1<<9) // fd_idx limit
 
 /* A kernel thread or user process.
  *
